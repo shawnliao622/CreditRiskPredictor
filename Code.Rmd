@@ -1,0 +1,460 @@
+---
+title: "Case Study"
+author: "Shawn Liao"
+date: "Thursday, December 08, 2022"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Data Pre-processing
+```{r}
+library(readxl)
+df <- read_excel("Credit_Data.xls")
+
+# Check if there's any null value
+na_count <-sapply(df, function(y) sum(length(which(is.na(y)))))
+na_count <- data.frame(na_count)
+sum(na_count)
+
+# Describe the dataset
+library(Hmisc)
+#describe(df)
+#
+df$`OBS#` <- NULL
+df$CHK_ACCT <- as.factor(df$CHK_ACCT)
+df$HISTORY <- as.factor(df$HISTORY)
+df$SAV_ACCT <- as.factor(df$SAV_ACCT)
+df$EMPLOYMENT <- as.factor(df$EMPLOYMENT)
+df$PRESENT_RESIDENT <- as.factor(df$PRESENT_RESIDENT)
+df$JOB <- as.factor(df$JOB)
+df$DEFAULT <- as.factor(df$DEFAULT)
+
+# Split data into training(70%) and validation(30%) samples with the seed set at 12345.
+set.seed(12345)
+inTrain <- sample(nrow(df), 0.7*nrow(df))
+#
+df_train <- data.frame(df[inTrain,])
+df_valid <- data.frame(df[-inTrain,])
+```
+
+First look on feature selection using Best Subsets Method
+```{r}
+library(leaps) 
+df1 <- read_excel("Credit_Data.xls")
+regfit.full=regsubsets(DEFAULT~.,data=df1,nvmax=10) 
+summary(regfit.full)
+plot(regfit.full,scale="bic")
+```
+
+Linear Probability Model
+```{r}
+train_Linear <- df_train
+test_Linear <- df_valid
+train_Linear$DEFAULT <- as.numeric(train_Linear$DEFAULT) - 1
+test_Linear$DEFAULT <- as.numeric(test_Linear$DEFAULT) - 1
+
+model_Linear <- lm(DEFAULT ~., data = train_Linear)
+summary(model_Linear) # R-squared: 0.286
+
+# Compute VIF
+library(car)
+vif(model_Linear)
+vif_values <- vif(model_Linear)[,3]
+barplot(vif_values, main = "GVIF^(1/(2*Df)) Values",horiz = TRUE, col = "steelblue")
+#
+predict_Linear_prob <- predict(model_Linear , newdata = test_Linear)
+predict_Linear <- ifelse(predict_Linear_prob > 0.5, 1, 0 )
+
+# Confusion Matrix
+library(caret)
+Predict <- data.frame(Predict = predict_Linear)
+predict <- factor(Predict$Predict)
+actual <- factor(test_Linear$DEFAULT)
+CM_Linear <- confusionMatrix(predict, actual, mode = "everything", positive="1")
+# Accuracy = 0.783, Precision = 0.662, Recall = 0.567, F1 Score = 0.61
+#
+library(pROC)
+ROC_Linear <- roc(test_Linear$DEFAULT, predict_Linear_prob) # AUC = 0.799
+
+# Gain Chart
+df1V <- data.frame(predict_Linear_prob,test_Linear$DEFAULT)
+df1S_Linear <- df1V[order(-predict_Linear_prob),]
+df1S_Linear$Gains <- cumsum(df1S_Linear$test_Linear.DEFAULT)
+plot(df1S_Linear$Gains,type="n",main="Gain Chart - Linear Probability",xlab="Number of Cases",ylab="Cumulative Success")
+lines(df1S_Linear$Gains,col="skyblue3")
+abline(0,sum(df1S_Linear$test_Linear.DEFAULT)/nrow(df1S_Linear),lty = 2, col="indianred3")
+```
+
+Logistic Regression
+```{r}
+train_Logi <- df_train
+test_Logi <- df_valid
+
+model_Logi <- glm(DEFAULT ~ ., data = train_Logi, family = "binomial" )
+summary(model_Logi)
+
+predict_Logi_prob <- predict(model_Logi, newdata = test_Logi, type = "response")
+predict_Logi <- ifelse(predict_Logi_prob>=0.5, "1", "0")
+
+# Confusion Matrix
+Predict <- data.frame(Predict = predict_Logi)
+predict <- factor(Predict$Predict)
+actual <- factor(test_Logi$DEFAULT)
+CM_Logi <- confusionMatrix(predict, actual, mode = "everything", positive="1")
+# Accuracy = 0.767, Precision = 0.62, Recall = 0.578, F1 Score = 0.598
+#
+predict_Logi_prop <- predict(model_Logi , newdata = test_Logi) 
+ROC_Logi <- roc(test_Logi$DEFAULT, predict_Logi_prop) # AUC = 0.792
+
+# Gain Chart
+PL_Logi <- as.numeric(test_Logi$DEFAULT)-1
+df1V <- data.frame(PL_Logi, predict_Logi_prob)
+df1S_Logi <- df1V[order(-predict_Logi_prob),]
+df1S_Logi$Gains <- cumsum(df1S_Logi$PL_Logi)
+plot(df1S_Logi$Gains,type="n",main="Gain Chart - Logistic Regression",xlab="Number of Cases",ylab="Cumulative Success")
+lines(df1S_Logi$Gains,col="skyblue3")
+abline(0,sum(df1S_Logi$PL_Logi)/nrow(df1S_Logi),lty = 2, col="indianred3")
+```
+
+Naive Bayes
+```{r}
+train_NB <- df_train
+test_NB <- df_valid
+
+library(e1071)
+model_NB <- naiveBayes(DEFAULT~., data=train_NB)
+predict_NB <- predict(model_NB, newdata=test_NB)
+
+model_NB[2]$tables$SAV_ACCT
+
+# Confusion Matrix
+Predict <- data.frame(Predict = predict_NB)
+predict <- factor(Predict$Predict)
+actual <- factor(test_NB$DEFAULT)
+CM_NB <- confusionMatrix(predict, actual, mode = "everything", positive="1")
+# Accuracy = 0.757, Precision = 0.586, Recall = 0.644, F1 Score = 0.614
+
+predict_NB_prop <- predict(model_NB , newdata = test_NB, type = "raw")
+prob_NB <- predict_NB_prop[,2]
+ROC_NB <- roc(test_NB$DEFAULT, prob_NB) # AUC = 0.7917
+
+# Lift Chart
+predicted.probability_NB <- predict(model_NB, newdata = test_NB, type="raw")
+PL_NB <- as.numeric(test_NB$DEFAULT)-1
+prob_NB <- predicted.probability_NB[,2] # Predicted probability of success
+df1 <- data.frame(PL_NB, prob_NB)
+df1S_NB <- df1[order(-prob_NB),]
+df1S_NB$Gains <- cumsum(df1S_NB$PL)
+plot(df1S_NB$Gains,type="n",main="Gain Chart - Naive Bayes",xlab="Number of Cases",ylab="Cumulative Success")
+lines(df1S_NB$Gains,col="skyblue3")
+abline(0,sum(df1S_NB$PL_NB)/nrow(df1S_NB),lty = 2, col="indianred3")
+```
+
+K-Nearest Neighbors
+```{r}
+df_train_K <- df_train
+df_test_K <- df_valid
+
+library(fastDummies)
+df_Dummy <- dummy_cols(df_train_K, select_columns = 
+                         c('CHK_ACCT','HISTORY', 'SAV_ACCT', 'EMPLOYMENT', 
+                           'PRESENT_RESIDENT', 'JOB'))
+df_Dummy[, c(1,3,11,12,19,27)] <- NULL
+df_Scale <- scale(df_Dummy[,-25])
+df_Scale <- as.data.frame(df_Scale)
+df_Scale$DEFAULT <- df_train_K$DEFAULT
+
+train_KNN <- df_Scale
+
+# Create dummy variables for test data
+df_Dummy_test <- dummy_cols(df_test_K, select_columns = 
+                              c('CHK_ACCT','HISTORY', 'SAV_ACCT', 'EMPLOYMENT',
+                                'PRESENT_RESIDENT', 'JOB'))
+df_Dummy_test[, c(1,3,11,12,19,27)] <- NULL
+df_Scale_test <- scale(df_Dummy_test[,-25])
+df_Scale_test <- as.data.frame(df_Scale_test)
+df_Scale_test$DEFAULT <- df_test_K$DEFAULT
+test_KNN <- df_Scale_test
+
+#Prepping input for KNN 
+library(class)
+train_input <- as.matrix(train_KNN[,-52])
+train_output <- as.vector(train_KNN[,52])
+validate_input <- as.matrix(test_KNN[,-52])
+
+#What is the best K ?
+kmax <- 30
+ER1 <- rep(0,kmax)
+ER2 <- rep(0,kmax)
+Sens_test <- rep(0,kmax)
+
+#
+set.seed(12345)
+for (i in 1:kmax){
+  prediction <- knn(train_input, train_input, train_output, k=i)
+  prediction2 <- knn(train_input, validate_input, train_output, k=i)
+  #
+  # The confusion matrix for training data is:
+  CM1 <- table(df_Scale$DEFAULT, prediction)
+  # The training error rate is:
+  ER1[i] <- (CM1[1,2]+CM1[2,1])/sum(CM1)
+  # The confusion matrix for test data is: 
+  CM2 <- table(df_Scale_test$DEFAULT,prediction2)
+  ER2[i] <- (CM2[1,2]+CM2[2,1])/sum(CM2)
+  Sens_test[i] <- (CM2[2,2]/(CM2[2,1]+CM2[2,2]))
+}
+
+plot(c(1,kmax),c(0,0.6),type="n", xlab="k",ylab="Rate")
+lines(ER1,col="indianred3")
+lines(ER2,col="skyblue2")
+lines(Sens_test,col="darkolivegreen4")
+legend("topright", c("Training error","Validation error", "Validation Recall"),lty=c(1,1), col=c("indianred3","skyblue3", "darkolivegreen4"))
+abline(v=5,col="dimgray", lty=2)
+
+# Predicting using k = 5
+prediction_best_k <- knn(train_input, validate_input,train_output, k=5)
+KNN.test.confusion <- table(df_Scale_test$DEFAULT,prediction_best_k)
+
+# Confusion Matrix
+Predict <- data.frame(Predict = prediction_best_k)
+predict <- factor(Predict$Predict)
+actual <- factor(df_Scale_test$DEFAULT)
+CM_KNN <- confusionMatrix(predict, actual, mode = "everything", positive="1")
+# Accuracy = 0.757, Precision = 0.631, Recall = 0.456, F1 Score = 0.529
+
+prediction <- knn(train_input, validate_input, train_output, k=5, prob=T)
+predicted.probability <- attr(prediction, "prob")
+prediction_KNN <- knn(train_input, validate_input, train_output, k=5)
+predicted.probability_KNN <- ifelse(prediction_KNN ==1, predicted.probability, 1-predicted.probability)
+ROC_KNN <- roc(test_KNN$DEFAULT, predicted.probability_KNN) # AUC = 0.746
+
+# Lift Chart
+prediction <- knn(train_input, validate_input, train_output, k=5, prob=T)
+predicted.probability <- attr(prediction, "prob")
+prediction_KNN <- knn(train_input, validate_input, train_output, k=5)
+predicted.probability_KNN <- ifelse(prediction_KNN ==1, predicted.probability, 1-predicted.probability)
+
+PL_KNN <- as.numeric(test_KNN$DEFAULT)-1
+df2 <- data.frame(predicted.probability_KNN,PL_KNN)
+df1S_KNN <- df2[order(-predicted.probability_KNN),]
+df1S_KNN$Gains <- cumsum(df1S_KNN$PL_KNN)
+plot(df1S_KNN$Gains,type="n",main="Gain Chart - KNN",xlab="Number of Cases",ylab="Cumulative Success")
+lines(df1S_KNN$Gains,col="skyblue3")
+abline(0,sum(df1S_KNN$PL_KNN)/nrow(df1S_KNN),lty = 2, col="indianred3")
+```
+
+Classification trees
+```{r}
+train_Tree <- df_train
+test_Tree <- df_valid
+
+library(tree)
+tree.credit=tree(DEFAULT~.,train_Tree)
+summary(tree.credit)
+tree.pred=predict(tree.credit,newdata=test_Tree,type="class")
+confusion = table(tree.pred,test_Tree$DEFAULT)
+accuracy_Tree <- (confusion[1,1]+confusion[2,2])/sum(confusion) 
+# Accuracy = 0.717
+
+# Now prune the tree
+Error = Size <- 1:12
+Error <- rep(0,length(Size))
+Error[1] = 90/300
+for (i in 2:12) {
+  prune.credit=prune.misclass(tree.credit,best=i)
+  tree.pred=predict(prune.credit,test_Tree,type="class")
+  confusion = table(tree.pred,test_Tree$DEFAULT)
+  Error[i] = (confusion[1,2]+confusion[2,1])/sum(confusion)
+ }
+plot(Size,Error,type = "o",xlab="Tree Size",ylab="Error Rate")
+
+# Predict using the pruned tree
+prune.credit=prune.misclass(tree.credit,best=which.min(Error))
+plot(prune.credit)
+text(prune.credit,pretty=0)
+tree.pred = predict(prune.credit,newdata=test_Tree,type="class")
+
+# Confusion Matrix
+Predict <- data.frame(Predict = tree.pred)
+predict <- factor(Predict$Predict)
+actual <- factor(test_Tree$DEFAULT)
+CM_Tree <- confusionMatrix(predict, actual, mode = "everything", positive="1")
+# Accuracy = 0.717, Precision = 0.549, Recall = 0.311, F1 Score = 0.397
+
+predicted.prob_tree= predict(prune.credit, test_Tree, type="vector")[,2]
+ROC_Tree <- roc(test_KNN$DEFAULT, predicted.prob_tree) # AUC = 0.726
+
+# Lift Chart
+PL_Tree <- as.numeric(test_Tree$DEFAULT)-1
+prob_Tree <- predicted.prob_tree
+df3 <- data.frame(PL_Tree, prob_Tree)
+df1S_Tree <- df3[order(-prob_Tree),]
+df1S_Tree$Gains <- cumsum(df1S_Tree$PL)
+plot(df1S_Tree$Gains,type="n",main="Gain Chart - Classification Tree",xlab="Number of Cases",ylab="Cumulative Success")
+lines(df1S_Tree$Gains,col="skyblue3")
+abline(0,sum(df1S_Tree$PL_Tree)/nrow(df1S_Tree),lty = 2, col="indianred3")
+```
+Ensemble Methods
+
+```{r}
+Credit <- read_excel("Credit_Data.xls")
+
+Credit$`OBS#` <- NULL
+Credit$CHK_ACCT <- as.factor(Credit$CHK_ACCT)
+Credit$HISTORY <- as.factor(Credit$HISTORY)
+Credit$SAV_ACCT <- as.factor(Credit$SAV_ACCT)
+Credit$EMPLOYMENT <- as.factor(Credit$EMPLOYMENT)
+Credit$PRESENT_RESIDENT <- as.factor(Credit$PRESENT_RESIDENT)
+Credit$JOB <- as.factor(Credit$JOB)
+Credit$DEFAULT <- as.factor(Credit$DEFAULT)
+
+# Rename column names
+names(Credit)[7] = "RADIO_TV"
+names(Credit)[17] = "CO_APPLICANT"
+
+#
+set.seed(12345)
+train = sample(nrow(Credit), nrow(Credit)*0.7)
+
+train_bag <- data.frame(Credit[inTrain,])
+valid_bag <- data.frame(Credit[-inTrain,])
+
+library(randomForest)
+
+# First do bagging (which is just RF with m = p)
+set.seed(12345)
+bag.credit=randomForest(DEFAULT~.,data=Credit,subset=train,
+                        mtry=30,importance=TRUE)
+yhat.bag = predict(bag.credit,newdata=valid_bag)
+credit.test=valid_bag$DEFAULT
+c = table(credit.test,yhat.bag)
+acc = (c[1,1]+c[2,2])/sum(c) # Accuracy = 0.77
+
+# Select the best mtry value with minimum OOB error.
+mtry <- tuneRF(Credit[-31],Credit$DEFAULT, ntreeTry=500,
+               stepFactor=1.5,improve=0.01, trace=TRUE, plot=TRUE)
+best.m <- mtry[mtry[, 2] == min(mtry[, 2]), 1]
+mtry
+
+# Now RF with m = 7
+set.seed(1)
+bag.credit=randomForest(DEFAULT~.,data=Credit,subset=train,
+                        mtry=best.m,importance=TRUE)
+
+yhat.bag = predict(bag.credit,newdata=valid_bag)
+credit.test=valid_bag$DEFAULT
+
+# Confusion Matrix
+Predict <- data.frame(Predict = yhat.bag)
+predict <- factor(Predict$Predict)
+actual <- factor(credit.test)
+CM_Bag <- confusionMatrix(predict, actual, mode = "everything", positive="1")
+# Accuracy = 0.78, Precision = 0.722, Recall = 0.433, F1 Score = 0.542
+
+# Variable Importance Plot
+importance(bag.credit)
+varImpPlot(bag.credit)
+
+predicted.prob_bag= predict(bag.credit, valid_bag, "prob")[,2]
+ROC_Bag <- roc(credit.test, predicted.prob_bag) # AUC = 0.819
+
+# Boosting
+library(gbm)
+Credit_boost <- Credit
+
+set.seed(12345)
+train = sample(nrow(Credit_boost), nrow(Credit_boost)*0.7)
+Credit_boost$DEFAULT <- as.numeric(Credit_boost$DEFAULT)-1
+
+set.seed(1)
+boost.credit=gbm(DEFAULT~.,data=Credit_boost[train,],distribution="bernoulli",
+                 n.trees=500,shrinkage=0.1,interaction.depth=4)
+summary(boost.credit, cBars=10)
+
+yhat.boost=predict(boost.credit,newdata=Credit_boost[-train,],n.trees=500,type="response")
+predict_Boost <- ifelse(yhat.boost>=0.5,1,0)
+yhat.test=Credit$DEFAULT[-train]
+
+# Confusion Matrix
+Predict <- data.frame(Predict = predict_Boost)
+predict <- factor(Predict$Predict)
+actual <- factor(yhat.test)
+CM_Boost <- confusionMatrix(predict, actual, mode = "everything", positive="1")
+# Accuracy = 0.787, Precision = 0.671, Recall = 0.567, F1 Score = 0.615
+
+ROC_Boost <- roc(Credit_boost[-train,]$DEFAULT, yhat.boost) # AUC = 0.803
+
+#
+# XGBOOST
+library(xgboost)
+
+df_XG <- read_excel("Credit_Data.xls")
+df_XG$`OBS#` <- NULL
+#
+set.seed(12345)
+inTrain <- sample(nrow(df_XG), 0.7*nrow(df_XG))
+traindata <- df_XG[inTrain,]
+testdata <-  df_XG[-inTrain,]
+
+train_x = data.matrix(traindata[, -31])
+train_y = as.matrix(traindata[,31])
+test_x = data.matrix(testdata[, -31])
+test_y = as.matrix(testdata[,31])
+
+xgb_train = xgb.DMatrix(data = train_x, label = train_y)
+xgb_test = xgb.DMatrix(data = test_x, label = test_y)
+
+watchlist = list(train=xgb_train, test=xgb_test)
+# Fit XGBoost model and display training and testing data at each round
+model = xgb.train(data = xgb_train, max.depth = 3, watchlist=watchlist, nrounds = 200, objective = "binary:logistic")
+
+# Minimum logloss is achieved at 66 rounds
+bst <- xgboost(data = train_x, label = train_y, max.depth = 8, eta = 0.1,
+               nround = 66, objective = "binary:logistic", eval_metric="error",
+               verbose = 0)
+
+labelT=testdata$DEFAULT
+datacreditT = as.matrix(testdata[,-31])
+pred <- predict(bst, datacreditT)
+predict_XGBoost <- ifelse(pred>0.5,1,0)
+
+# Confusion Matrix
+Predict <- data.frame(Predict = predict_XGBoost)
+predict <- factor(Predict$Predict)
+actual <- factor(labelT)
+CM_XGBoost <- confusionMatrix(predict, actual, mode = "everything", positive="1")
+# Accuracy = 0.79, Precision = 0.68, Recall = 0.567, F1 Score = 0.618
+
+ROC_XGBoost <- roc(labelT, pred) # AUC = 0.805
+```
+
+Combined Model Method
+```{r}
+Actuals <- df_valid$DEFAULT
+  
+dfcombined <- data.frame(predict_Linear, predict_Logi, predict_NB, prediction_best_k, yhat.bag, predict_Boost, predict_XGBoost)
+col <- apply(dfcombined,1,function(x) names(which.max(table(x))))
+
+# Confusion Matrix
+Predict <- data.frame(Predict = col)
+predict <- factor(Predict$Predict)
+actual <- factor(Actuals)
+CM_Combined <- confusionMatrix(predict, actual, mode = "everything", positive="1")
+# Accuracy = 0.8, Precision = 0.708, Recall = 0.567, F1 Score = 0.63
+```
+
+ROC Curve for all models
+```{r}
+roc_linear <- plot(ROC_Linear, print.auc = TRUE, col = "lightpink3", print.auc.y = .45, legacy.axes=T, xlab="False Positive Rate", ylab="True Positive Rate",asp=NA)
+roc_log <- plot(ROC_Logi, print.auc = TRUE, col = "brown", print.auc.y = .4, legacy.axes=T, add=TRUE)
+roc_NB <- plot(ROC_NB, print.auc = TRUE, col = "chocolate1", print.auc.y = .35 ,legacy.axes=T, add=TRUE)
+roc_KNN <- plot(ROC_KNN, print.auc = TRUE, print.auc.y = .3, legacy.axes=T, col = "yellow3", add=TRUE)
+roc_Tree <- plot(ROC_Tree, print.auc = TRUE, print.auc.y = .25, legacy.axes=T, col = "darkolivegreen3", add=TRUE)
+roc_Bagging <- plot(ROC_Bag, print.auc = TRUE, col = "deepskyblue3", print.auc.y = .2, legacy.axes=T, add=TRUE)
+roc_Boosting <- plot(ROC_Boost, print.auc = TRUE, col = "darkslateblue", print.auc.y = .15, legacy.axes=T, add=TRUE)
+roc_Xgboost <- plot(ROC_XGBoost, print.auc = TRUE, col = "mistyrose4", print.auc.y = .1, legacy.axes=T, add=TRUE)
+
+legend("bottomright", c("Linear","Logistic", "Naive Bayes", "K-Nearest Neighbors", "Classification Tree", "Random Forest", "Bossting", "XGBoost"),lty=c(1,1), col=c("lightpink3","brown","chocolate1", "yellow3", "darkolivegreen3", "deepskyblue3", "darkslateblue", "mistyrose4"), cex=0.5, pch=20, text.font=3, title="Legend")
+```
